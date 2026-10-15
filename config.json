@@ -1,0 +1,7 @@
+{
+  "capture": {"left": 0, "top": 0, "width": 1280, "height": 720},
+  "keys": {"left": "a", "right": "d", "jump": "space", "down": "s", "light": "j", "heavy": "k", "dodge": "l"},
+  "step_seconds": 0.10,
+  "episode_seconds": 60,
+  "countdown_seconds": 5
+}
