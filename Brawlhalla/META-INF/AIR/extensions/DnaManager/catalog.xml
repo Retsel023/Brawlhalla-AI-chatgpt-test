@@ -1,0 +1,26 @@
+<?xml version="1.0" ?>
+<swc xmlns="http://www.adobe.com/flash/swccatalog/9">
+    <versions>
+        <swc version="1.2"/>
+        <compiler name="ActionScript Compiler" version="3.2.0" build="0"/>
+    </versions>
+    <features>
+        <feature-script-deps/>
+    </features>
+    <libraries>
+        <library path="library.swf">
+            <script name="ANE_DnaManager" mod="1788279819366">
+                <def id="ANE_DnaManager"/>
+                <dep id="Boolean" type="s"/>
+                <dep id="Object" type="i"/>
+                <dep id="String" type="s"/>
+                <dep id="flash.external:ExtensionContext" type="s"/>
+                <dep id="flash.utils:ByteArray" type="s"/>
+                <dep id="uint" type="s"/>
+            </script>
+            <digests>
+                <digest type="SHA-256" signed="false" value="0238055540b93a399f51027e34603a2a8d78565eeea77250eac76e2dc4cd839e"/>
+            </digests>
+        </library>
+    </libraries>
+</swc>

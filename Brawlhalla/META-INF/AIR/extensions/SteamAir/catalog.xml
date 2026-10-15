@@ -1,0 +1,39 @@
+<?xml version="1.0" ?>
+<swc xmlns="http://www.adobe.com/flash/swccatalog/9">
+    <versions>
+        <swc version="1.2"/>
+        <compiler name="ActionScript Compiler" version="3.2.0" build="0"/>
+    </versions>
+    <features>
+        <feature-script-deps/>
+    </features>
+    <libraries>
+        <library path="library.swf">
+            <script name="SteamAir" mod="1685997936801">
+                <def id="SteamAir"/>
+                <dep id="Array" type="e"/>
+                <dep id="Boolean" type="e"/>
+                <dep id="Error" type="e"/>
+                <dep id="Function" type="s"/>
+                <dep id="SteamEvent" type="e"/>
+                <dep id="String" type="e"/>
+                <dep id="__AS3__.vec:Vector" type="e"/>
+                <dep id="flash.events:EventDispatcher" type="i"/>
+                <dep id="flash.events:StatusEvent" type="e"/>
+                <dep id="flash.external:ExtensionContext" type="s"/>
+                <dep id="int" type="e"/>
+                <dep id="uint" type="s"/>
+            </script>
+            <script name="SteamEvent" mod="1657571130839">
+                <def id="SteamEvent"/>
+                <dep id="Boolean" type="s"/>
+                <dep id="String" type="s"/>
+                <dep id="flash.events:Event" type="i"/>
+                <dep id="int" type="s"/>
+            </script>
+            <digests>
+                <digest type="SHA-256" signed="false" value="fd1e9b94135ba51344c6d98c4a0fb6176ed3b714a18a6172b38df3d93e9aca24"/>
+            </digests>
+        </library>
+    </libraries>
+</swc>

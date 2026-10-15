@@ -1,0 +1,26 @@
+<?xml version="1.0" ?>
+<swc xmlns="http://www.adobe.com/flash/swccatalog/9">
+    <versions>
+        <swc version="1.2"/>
+        <compiler name="ActionScript Compiler" version="3.2.0" build="0"/>
+    </versions>
+    <features>
+        <feature-script-deps/>
+    </features>
+    <libraries>
+        <library path="library.swf">
+            <script name="WindowsExtensionWrapper" mod="1738877099997">
+                <def id="WindowsExtensionWrapper"/>
+                <dep id="Boolean" type="s"/>
+                <dep id="String" type="s"/>
+                <dep id="flash.events:EventDispatcher" type="i"/>
+                <dep id="flash.external:ExtensionContext" type="s"/>
+                <dep id="int" type="s"/>
+                <dep id="uint" type="e"/>
+            </script>
+            <digests>
+                <digest type="SHA-256" signed="false" value="d135573bd4fd632c3c12b796bf4b347a57cd204f2c1a16d9bae016982bb9cc1a"/>
+            </digests>
+        </library>
+    </libraries>
+</swc>

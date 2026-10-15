@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<extension xmlns="http://ns.adobe.com/air/extension/3.1">
+
+  <id>WindowsExtensionWrapper</id>
+
+  <versionNumber>1.0.0</versionNumber>
+
+  <platforms>
+
+  		<platform name="Windows-x86">
+			<applicationDeployment>
+				<nativeLibrary>FrameFixDLL.dll</nativeLibrary>
+
+				<initializer>BHFrameFixExtensionInitializer</initializer>
+				<finalizer>BHFrameFixExtensionFinalizer</finalizer>
+			</applicationDeployment>
+		</platform>
+		<platform name="Windows-x86-64">
+			<applicationDeployment>
+				<nativeLibrary>FrameFixDLL.dll</nativeLibrary>
+
+				<initializer>BHFrameFixExtensionInitializer</initializer>
+				<finalizer>BHFrameFixExtensionFinalizer</finalizer>
+			</applicationDeployment>
+		</platform>
+
+  </platforms>
+</extension>

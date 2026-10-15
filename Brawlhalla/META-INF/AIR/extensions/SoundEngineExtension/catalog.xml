@@ -1,0 +1,27 @@
+<?xml version="1.0" ?>
+<swc xmlns="http://www.adobe.com/flash/swccatalog/9">
+    <versions>
+        <swc version="1.2"/>
+        <compiler name="ActionScript Compiler" version="3.2.0" build="0"/>
+    </versions>
+    <features>
+        <feature-script-deps/>
+    </features>
+    <libraries>
+        <library path="library.swf">
+            <script name="SoundEngineExtension" mod="1657571130573">
+                <def id="SoundEngineExtension"/>
+                <dep id="Array" type="s"/>
+                <dep id="Number" type="s"/>
+                <dep id="Object" type="i"/>
+                <dep id="String" type="s"/>
+                <dep id="flash.external:ExtensionContext" type="s"/>
+                <dep id="int" type="s"/>
+                <dep id="uint" type="s"/>
+            </script>
+            <digests>
+                <digest type="SHA-256" signed="false" value="dcc8ba81cdd91bc9e01b2897043af6caeea00124376b759be59d822485bbb264"/>
+            </digests>
+        </library>
+    </libraries>
+</swc>

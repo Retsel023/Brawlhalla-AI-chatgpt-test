@@ -1,0 +1,20 @@
+<extension xmlns="http://ns.adobe.com/air/extension/2.5"> 
+	<id>EpicAir</id>
+	<versionNumber>0.0.1</versionNumber>
+	<platforms>
+		<platform name="Windows-x86">
+			<applicationDeployment>
+				<nativeLibrary>EpicAir.dll</nativeLibrary>
+				<initializer>EpicAirInitializer</initializer>
+				<finalizer>EpicAirFinalizer</finalizer>
+			</applicationDeployment>
+		</platform>
+		<platform name="Windows-x86-64">
+			<applicationDeployment>
+				<nativeLibrary>EpicAir.dll</nativeLibrary>
+				<initializer>EpicAirInitializer</initializer>
+				<finalizer>EpicAirFinalizer</finalizer>
+			</applicationDeployment>
+		</platform>
+	</platforms>
+</extension>
