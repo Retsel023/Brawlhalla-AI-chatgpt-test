@@ -1,7 +1,37 @@
 {
-  "capture": {"left": 0, "top": 0, "width": 1280, "height": 720},
-  "keys": {"left": "a", "right": "d", "jump": "space", "down": "s", "light": "j", "heavy": "k", "dodge": "l"},
-  "step_seconds": 0.10,
+  "capture": {
+    "left": 0,
+    "top": 0,
+    "width": 1280,
+    "height": 720
+  },
+  "keys": {
+    "left": "a",
+    "right": "d",
+    "jump": "space",
+    "down": "s",
+    "light": "j",
+    "heavy": "k",
+    "dodge": "l"
+  },
+  "step_seconds": 0.1,
   "episode_seconds": 60,
-  "countdown_seconds": 5
+  "countdown_seconds": 5,
+  "state": {
+    "self_player": "Player1",
+    "opponent_player": "Player2",
+    "position_scale": 1000.0,
+    "damage_scale": 100.0,
+    "damage_reward_scale": 0.01
+  },
+  "bridge": {
+    "host": "127.0.0.1",
+    "port": 8765,
+    "timeout_seconds": 3.0,
+    "expected_build": "11.00.36"
+  },
+  "game": {
+    "directory": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Brawlhalla",
+    "expected_swf_sha256": "3b57541b92881ca8c0e6cb7b2f2d8661469e2c8734dbe8963dc72acd65bc30c5"
+  }
 }
