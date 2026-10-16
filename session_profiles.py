@@ -17,6 +17,14 @@ PROFILE_PRESETS = {
 }
 PROFILE_FIELDS = ('profile', 'match_format', 'opponent_kind', 'online', 'self_player',
                   'teammate_player', 'opponents', 'friendly_fire')
+TEAMMATE_FIELDS = ('teammate_kind', 'teammate_account_id')
+TEAMMATE_KINDS = ('none', 'random', 'regular', 'ai', 'bot')
+
+
+def default_teammate_kind(name, match_format):
+    if match_format == '1v1':
+        return 'none'
+    return 'bot' if name == 'bot_training' else 'random'
 
 
 def validate_profile(payload):
@@ -53,11 +61,30 @@ def validate_profile(payload):
         raise ValueError('All player roles need explicit Player<number> keys')
     if len(set(slots)) != len(slots):
         raise ValueError('Self, teammate, and opponent roles must be different players')
-    return {field: (list(enemies) if field == 'opponents' else payload[field]) for field in PROFILE_FIELDS}
+    kind = payload.get('teammate_kind', default_teammate_kind(name, match_format))
+    account_id = payload.get('teammate_account_id')
+    if kind not in TEAMMATE_KINDS:
+        raise ValueError('teammate_kind must be none, random, regular, ai, or bot')
+    if (match_format == '1v1') != (kind == 'none'):
+        raise ValueError('1v1 requires teammate_kind=none; 2v2 requires a teammate arrangement')
+    if account_id is not None and (type(account_id) is not int or account_id < 0):
+        raise ValueError('teammate_account_id must be a nonnegative integer or null')
+    if account_id is not None and kind != 'regular':
+        raise ValueError('teammate_account_id is only supported for a regular teammate')
+    canonical = {field: (list(enemies) if field == 'opponents' else payload[field]) for field in PROFILE_FIELDS}
+    canonical.update(teammate_kind=kind, teammate_account_id=account_id)
+    return canonical
+
+
+def controlled_slots(profile):
+    """Return the explicit player slots controlled by this policy session."""
+    profile = validate_profile(profile)
+    slots = (profile['self_player'],)
+    return slots + (profile['teammate_player'],) if profile['teammate_kind'] == 'ai' else slots
 
 
 def make_profile(name, *, match_format=None, self_player='Player1', teammate_player=None,
-                 opponents=None, friendly_fire=False):
+                 opponents=None, friendly_fire=False, teammate_kind=None, teammate_account_id=None):
     if name not in PROFILE_PRESETS:
         raise ValueError(f'Unknown session profile: {name}')
     preset = PROFILE_PRESETS[name]
@@ -71,6 +98,8 @@ def make_profile(name, *, match_format=None, self_player='Player1', teammate_pla
         'teammate_player': (teammate_player or 'Player2') if teams else None,
         'opponents': list(opponents) if opponents is not None else (['Player3', 'Player4'] if teams else ['Player2']),
         'friendly_fire': friendly_fire,
+        'teammate_kind': default_teammate_kind(name, match_format) if teammate_kind is None else teammate_kind,
+        'teammate_account_id': teammate_account_id,
     })
 
 
@@ -128,5 +157,6 @@ def default_options(name='bot_training', **kwargs):
     if preset is None:
         raise ValueError(f'Unknown session profile: {name}')
     profile = make_profile(name, **{k: kwargs.pop(k) for k in tuple(kwargs)
-                                  if k in {'match_format', 'self_player', 'teammate_player', 'opponents', 'friendly_fire'}})
+                                  if k in {'match_format', 'self_player', 'teammate_player', 'opponents',
+                                           'friendly_fire', *TEAMMATE_FIELDS}})
     return SessionOptions(profile, learning=kwargs.pop('learning', preset['learning']), **kwargs)

@@ -42,12 +42,20 @@ class SessionProviderFixture:
     def _response(self, request):
         command = request["command"]
         if command == "hello":
-            return {"request_id": request["request_id"], "protocol": 2,
+            protocol = request['protocol']
+            hello = {"request_id": request["request_id"], "protocol": protocol,
                     "observation_schema": OBSERVATION_SCHEMA,
                     "mode": "online_controlled" if self.profile["online"] else "offline_controlled",
                     "controlled_player": self.profile["self_player"],
                     "game_build": "11.00.36",
                     "capabilities": ["state", "actions", "session", "next_episode"]}
+            if protocol == 3:
+                from session_profiles import controlled_slots
+                slots = controlled_slots(self.profile)
+                hello['controlled_players'] = list(slots)
+                hello['input_routes'] = {slot: f'fixture-input:{index}' for index, slot in enumerate(slots)}
+                hello['capabilities'] += ['team_setup', 'joint_actions', 'independent_inputs']
+            return hello
         if command == "configure":
             return {"request_id": request["request_id"], "session_id": self.session_id,
                     **copy.deepcopy(self.profile)}

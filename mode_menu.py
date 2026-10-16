@@ -9,7 +9,10 @@ import sys
 import threading
 import uuid
 
-from session_profiles import PROFILE_PRESETS, SessionOptions, default_options
+from session_profiles import PROFILE_PRESETS, SessionOptions, default_options, default_teammate_kind
+
+TEAMMATE_LABELS = {'none': 'No teammate', 'random': 'Random teammate',
+                   'regular': 'Regular teammate (you)', 'ai': 'AI controls both', 'bot': 'Game bot'}
 
 
 def build_options(form):
@@ -18,10 +21,21 @@ def build_options(form):
     if isinstance(enemies, str):
         enemies = [value.strip() for value in enemies.split(',') if value.strip()]
     match_format = form.get('match_format') or PROFILE_PRESETS[form['profile']]['match_format']
+    teammate_kind = form.get('teammate_kind') or default_teammate_kind(form['profile'], match_format)
+    teammate_kind = {label: kind for kind, label in TEAMMATE_LABELS.items()}.get(teammate_kind, teammate_kind)
+    account_id = form.get('teammate_account_id')
+    if match_format == '1v1':
+        teammate_kind, account_id = 'none', None
+    elif account_id is not None:
+        if isinstance(account_id, str):
+            account_id = int(account_id.strip()) if account_id.strip() else None
+        elif type(account_id) is not int:
+            raise ValueError('Teammate account ID must be a nonnegative integer')
     return default_options(
         form['profile'], match_format=match_format,
         self_player=form.get('self_player', 'Player1').strip(),
         teammate_player=form.get('teammate_player', 'Player2').strip() if match_format == '2v2' else None,
+        teammate_kind=teammate_kind, teammate_account_id=account_id,
         opponents=enemies or None, friendly_fire=form.get('friendly_fire', False),
         learning=form.get('learning', PROFILE_PRESETS[form['profile']]['learning']),
         steps=int(form.get('steps', 0)), max_seconds=float(form.get('max_seconds', 0)),
@@ -36,6 +50,7 @@ def options_to_form(options):
     form.update(form.pop('profile'))
     form['opponents'] = ', '.join(form['opponents'])
     form['teammate_player'] = form['teammate_player'] or 'Player2'
+    form['teammate_account_id'] = '' if form['teammate_account_id'] is None else str(form['teammate_account_id'])
     form['initialize_from'] = form['initialize_from'] or ''
     return form
 
@@ -147,8 +162,9 @@ def open_menu(config_path='config.json'):
     except tk.TclError as error:
         raise RuntimeError(f'No usable desktop display: {error}') from error
     root.title('Brawlhalla learning agent')
-    root.geometry('900x850')
-    root.minsize(760, 700)
+    available_height = max(700, root.winfo_screenheight() - 80)
+    root.geometry(f'900x{min(950, available_height)}')
+    root.minsize(760, min(800, available_height))
     panel = ttk.Frame(root, padding=12)
     panel.pack(fill='both', expand=True)
     panel.columnconfigure(1, weight=1)
@@ -169,6 +185,7 @@ def open_menu(config_path='config.json'):
     captions = [('match_format', 'Bot match format'), ('learning', 'Update policy weights'),
                 ('steps', 'Steps (0 = continuous)'), ('max_seconds', 'Time limit in seconds (0 = unlimited)'),
                 ('checkpoint_interval', 'Checkpoint every N steps'), ('self_player', 'AI player key'),
+                ('teammate_kind', 'Teammate arrangement (2v2)'), ('teammate_account_id', 'Regular teammate account ID (optional)'),
                 ('teammate_player', 'Teammate key (2v2)'), ('opponents', 'Opponent keys (comma separated)'),
                 ('friendly_fire', 'Friendly fire (2v2)'), ('device', 'Device (cuda = AMD ROCm)'),
                 ('model_root', 'Model folder'), ('initialize_from', 'Initialize from checkpoint (optional)')]
@@ -176,9 +193,11 @@ def open_menu(config_path='config.json'):
         ttk.Label(panel, text=caption).grid(row=row, column=0, sticky='w', padx=(0, 12), pady=3)
         if name in boolean_fields:
             widget = ttk.Checkbutton(panel, variable=fields[name])
-        elif name in {'device', 'match_format'}:
+        elif name in {'device', 'match_format', 'teammate_kind'}:
+            values = {'device': ('auto', 'cpu', 'cuda'), 'match_format': ('1v1', '2v2'),
+                      'teammate_kind': tuple(label for kind, label in TEAMMATE_LABELS.items() if kind != 'none')}
             widget = ttk.Combobox(panel, textvariable=fields[name], state='readonly',
-                                  values=('auto', 'cpu', 'cuda') if name == 'device' else ('1v1', '2v2'))
+                                  values=values[name])
         else:
             widget = ttk.Entry(panel, textvariable=fields[name])
         widget.grid(row=row, column=1, sticky='ew', pady=3)
@@ -193,12 +212,13 @@ def open_menu(config_path='config.json'):
             button.grid(row=row, column=2, padx=(6, 0))
             widgets[name + '_browse'] = button
     status = tk.StringVar(value='Idle — configure a session or check the provider connection.')
-    ttk.Label(panel, textvariable=status, wraplength=820).grid(row=16, column=0, columnspan=3, sticky='w', pady=8)
+    actions_row = 3 + len(captions)
+    ttk.Label(panel, textvariable=status, wraplength=820).grid(row=actions_row + 1, column=0, columnspan=3, sticky='w', pady=8)
     actions = ttk.Frame(panel)
-    actions.grid(row=15, column=0, columnspan=3, sticky='ew', pady=10)
+    actions.grid(row=actions_row, column=0, columnspan=3, sticky='ew', pady=10)
     log = tk.Text(panel, height=15, state='disabled', wrap='word')
-    log.grid(row=17, column=0, columnspan=3, sticky='nsew')
-    panel.rowconfigure(17, weight=1)
+    log.grid(row=actions_row + 2, column=0, columnspan=3, sticky='nsew')
+    panel.rowconfigure(actions_row + 2, weight=1)
     running = closing = False
 
     def current_options():
@@ -207,9 +227,10 @@ def open_menu(config_path='config.json'):
     def refresh_fields():
         teams = fields['match_format'].get() == '2v2'
         for name, widget in widgets.items():
-            disabled = running or (name in {'teammate_player', 'friendly_fire'} and not teams)
+            disabled = running or (name in {'teammate_player', 'friendly_fire', 'teammate_kind'} and not teams)
+            disabled |= name == 'teammate_account_id' and (not teams or fields['teammate_kind'].get() != TEAMMATE_LABELS['regular'])
             disabled |= name == 'match_format' and labels[selected.get()] != 'bot_training'
-            widget.configure(state='disabled' if disabled else 'readonly' if name in {'device', 'match_format'} else 'normal')
+            widget.configure(state='disabled' if disabled else 'readonly' if name in {'device', 'match_format', 'teammate_kind'} else 'normal')
         mode.configure(state='disabled' if running else 'readonly')
         for button in (start_button, check_button, load_button, save_button):
             button.configure(state='disabled' if running else 'normal')
@@ -221,13 +242,28 @@ def open_menu(config_path='config.json'):
         fields['learning'].set(preset['learning'])
         fields['match_format'].set(preset['match_format'])
         fields['friendly_fire'].set(False)
+        fields['teammate_kind'].set(TEAMMATE_LABELS[default_teammate_kind(labels[selected.get()], preset['match_format'])])
+        fields['teammate_account_id'].set('')
         fields['opponents'].set('Player3, Player4' if preset['match_format'] == '2v2' else 'Player2')
-        refresh_fields()
+        change_teammate()
 
     def change_format(_event=None):
         fields['opponents'].set('Player3, Player4' if fields['match_format'].get() == '2v2' else 'Player2')
         if fields['match_format'].get() == '1v1':
             fields['friendly_fire'].set(False)
+        fields['teammate_kind'].set(TEAMMATE_LABELS[default_teammate_kind(labels[selected.get()], fields['match_format'].get())])
+        fields['teammate_account_id'].set('')
+        change_teammate()
+
+    def change_teammate(_event=None):
+        kind = fields['teammate_kind'].get()
+        if kind != TEAMMATE_LABELS['regular']:
+            fields['teammate_account_id'].set('')
+        hints = {TEAMMATE_LABELS['ai']: 'AI controls both players through independent inputs, such as a keyboard and a secondary controller.',
+                 TEAMMATE_LABELS['regular']: 'You can keep your keyboard while the AI uses the secondary controller slot. Enter your account ID, or pin the first observed teammate.',
+                 TEAMMATE_LABELS['random']: 'The teammate may be a different person each match.',
+                 TEAMMATE_LABELS['bot']: 'The game controls the teammate bot.'}
+        description.set(PROFILE_PRESETS[labels[selected.get()]]['description'] + ' ' + hints.get(kind, ''))
         refresh_fields()
 
     def settings(save):
@@ -246,9 +282,8 @@ def open_menu(config_path='config.json'):
                 values = options_to_form(options)
                 selected.set(PROFILE_PRESETS[values['profile']]['label'])
                 for name, variable in fields.items():
-                    variable.set(values[name])
-                description.set(PROFILE_PRESETS[values['profile']]['description'])
-                refresh_fields()
+                    variable.set(TEAMMATE_LABELS[values[name]] if name == 'teammate_kind' else values[name])
+                change_teammate()
         except (ValueError, TypeError, KeyError, OSError) as error:
             messagebox.showerror('Session settings', str(error), parent=root)
 
@@ -322,6 +357,7 @@ def open_menu(config_path='config.json'):
         button.pack(side='left', padx=(0, 5))
     mode.bind('<<ComboboxSelected>>', set_mode)
     widgets['match_format'].bind('<<ComboboxSelected>>', change_format)
+    widgets['teammate_kind'].bind('<<ComboboxSelected>>', change_teammate)
     selected.set(PROFILE_PRESETS['bot_training']['label'])
     set_mode()
     root.protocol('WM_DELETE_WINDOW', close)

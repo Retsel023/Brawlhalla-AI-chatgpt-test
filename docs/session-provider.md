@@ -2,6 +2,8 @@
 
 This is the contract for a separately implemented Windows game-side provider. It is not a Brawlhalla network endpoint. The Python client is implemented; live instrumentation, input routing, bot setup, and online matchmaking remain provider work.
 
+The current CLI uses protocol 2 for duel sessions and [protocol 3](team-control-provider.md) for 2v2 teammate selection and optional dual-character control. This document remains the underlying single-control lifecycle and the legacy protocol-2 API.
+
 Transport is the same bounded, loopback-only JSONL transport as [protocol 1](state-bridge.md). Each response echoes the exact integer `request_id`. The protocol-1 client and commands remain supported separately; a session client requires protocol 2.
 
 ## Hello

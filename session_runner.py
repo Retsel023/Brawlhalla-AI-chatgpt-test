@@ -7,7 +7,7 @@ import sys
 import time
 
 from agent import choose_device, load_config
-from session_profiles import PROFILE_PRESETS, SessionOptions, default_options
+from session_profiles import PROFILE_PRESETS, SessionOptions, default_options, controlled_slots, TEAMMATE_KINDS
 
 
 class StopControl:
@@ -41,6 +41,8 @@ def state_contract(config):
 
 def _progress(model, options, lineage, *, session_steps, episodes):
     return {'profile': options.profile['profile'], 'match_format': options.profile['match_format'],
+            'teammate_kind': options.profile['teammate_kind'],
+            'controlled_players': list(controlled_slots(options.profile)),
             'learning': options.learning, 'session_steps': session_steps,
             'model_timesteps': int(model.num_timesteps), 'episodes': episodes,
             'model_origin': lineage.get('strategy', 'unknown')}
@@ -65,7 +67,12 @@ def _make_callback(store, branch, lineage, options, contract, stop, start_steps)
         def _on_step(self):
             if stop():
                 raise KeyboardInterrupt
-            self.episodes += sum(bool(done) for done in self.locals.get('dones', ()))
+            # Two AI actors share one match. Count a simultaneous terminal once.
+            dones = self.locals.get('dones', ())
+            infos = self.locals.get('infos', ())
+            completed = {info.get('episode_id', index)
+                         for index, (done, info) in enumerate(zip(dones, infos)) if done}
+            self.episodes += len(completed)
             steps = int(self.model.num_timesteps - start_steps)
             if steps >= self.next_save:
                 self.save()
@@ -83,7 +90,11 @@ def run_session(options, config, *, stop_file=None, check_only=False, model_kwar
 
     stop = StopControl(stop_file, options.max_seconds)
     bridge = config.get('bridge', {})
-    client = SessionBridgeClient(
+    teams = options.profile['match_format'] == '2v2'
+    if teams:
+        from team_control_bridge import TeamControlClient
+    client_type = TeamControlClient if teams else SessionBridgeClient
+    client = client_type(
         host=bridge.get('host', '127.0.0.1'), port=bridge.get('port', 8765),
         timeout=bridge.get('timeout_seconds', 3.0),
         episode_timeout=bridge.get('episode_timeout_seconds', 120.0),
@@ -108,17 +119,26 @@ def run_session(options, config, *, stop_file=None, check_only=False, model_kwar
         expected_mode = 'online_controlled' if options.profile['online'] else 'offline_controlled'
         if client.provider_mode != expected_mode:
             raise ValueError(f'Selected mode requires provider {expected_mode}; got {client.provider_mode}.')
-        if client.controlled_player != options.profile['self_player']:
+        if teams:
+            client.validate_control(options.profile)
+        elif client.controlled_player != options.profile['self_player']:
             raise ValueError('Provider controlled_player does not match the selected self_player.')
+        if getattr(client, 'input_routes', None):
+            print('Provider input routes:', json.dumps(client.input_routes), flush=True)
         if check_only:
             print('Provider handshake passed. No session was configured and no game actions were requested.', flush=True)
             return 0
         contract = state_contract(config)
         hold_seconds = config.get('step_seconds', 0.1)
-        factory = lambda: SessionEnv(client, options.profile, hold_seconds=hold_seconds,
-                                     position_scale=contract['position_scale'], damage_scale=contract['damage_scale'],
-                                     damage_reward_scale=contract['damage_reward_scale'])
-        env = VecFrameStack(DummyVecEnv([factory]), n_stack=contract['history_frames'])
+        parameters = {'hold_seconds': hold_seconds, 'position_scale': contract['position_scale'],
+                      'damage_scale': contract['damage_scale'],
+                      'damage_reward_scale': contract['damage_reward_scale']}
+        if options.profile['teammate_kind'] == 'ai':
+            from dual_team_env import DualTeamVecEnv
+            base_env = DualTeamVecEnv(client, options.profile, **parameters)
+        else:
+            base_env = DummyVecEnv([lambda: SessionEnv(client, options.profile, **parameters)])
+        env = VecFrameStack(base_env, n_stack=contract['history_frames'])
         store = ModelStore(options.model_root, model_kwargs=model_kwargs)
         model, lineage = store.load_or_create(
             env, branch, device=choose_device(options.device), initialize_from=options.initialize_from,
@@ -143,7 +163,7 @@ def run_session(options, config, *, stop_file=None, check_only=False, model_kwar
             while not stop() and (not options.steps or steps_played < options.steps):
                 action, _ = model.predict(observation, deterministic=True)
                 observation, _, _, _ = env.step(action)
-                steps_played += 1
+                steps_played += env.num_envs
         print('Session finished:', stop.reason or 'step_limit', flush=True)
         return 0
     except KeyboardInterrupt:
@@ -173,6 +193,9 @@ def _parser():
     parser.add_argument('--format', dest='match_format', choices=['1v1', '2v2'])
     parser.add_argument('--self-player')
     parser.add_argument('--teammate-player')
+    parser.add_argument('--teammate-kind', choices=TEAMMATE_KINDS,
+                        help='random partner, regular partner, AI both, or game bot')
+    parser.add_argument('--teammate-account-id', type=int, help='optional fixed account ID for a regular teammate')
     parser.add_argument('--opponents', nargs='+')
     parser.add_argument('--friendly-fire', action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument('--learn', dest='learning', action=argparse.BooleanOptionalAction, default=None)
@@ -195,7 +218,8 @@ def main(argv=None):
         config = load_config(args.config)
         if 'sessions' in config and not isinstance(config['sessions'], dict):
             raise ValueError('config sessions must be an object')
-        fields = ('match_format', 'self_player', 'teammate_player', 'opponents', 'friendly_fire',
+        fields = ('match_format', 'self_player', 'teammate_player', 'teammate_kind',
+                  'teammate_account_id', 'opponents', 'friendly_fire',
                   'learning', 'steps', 'checkpoint_interval', 'model_root', 'initialize_from', 'device', 'max_seconds')
         overrides = {name: getattr(args, name) for name in fields if getattr(args, name) is not None}
         if args.session_file is not None:

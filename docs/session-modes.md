@@ -17,13 +17,32 @@ Running `agent.py` without arguments also opens the menu. Standard Windows Pytho
 | Fight the AI — 1v1 | Private/local human versus the AI | Evaluate the saved duel model without changing weights |
 | Train against bots | Offline 1v1 or 2v2 against bots | Keep learning until stopped |
 | Online humans — 1v1 | Online human opponents | Learn from successive 1v1 matches |
-| Online humans — 2v2 | Online teams with one controlled AI slot | Learn team play, starting from compatible duel weights when available |
+| Online humans — 2v2 | Online teams with one or two controlled AI slots | Learn team play, starting from compatible duel weights when available |
 
 The learning checkbox can enable learning while you fight it, or turn learning off for evaluation in another mode. Evaluation requires an existing checkpoint. Train against bots first if no duel model exists.
 
 Set the explicit AI, teammate, and opponent player keys to the roles actually reported by the provider. In 1v1, the default is AI `Player1` versus `Player2`. In 2v2, the default is AI `Player1`, teammate `Player2`, opponents `Player3, Player4`. These are role assignments, not guesses about which player is on your keyboard. The provider must route your inputs to the human player and the AI's inputs to its declared slot.
 
 Friendly fire is a 2v2 setting. It is included in observations and must match the real match rules. Team rewards use changes in total opponent damage minus changes in self and teammate damage; they do not identify who caused friendly damage.
+
+### Choose the teammate arrangement
+
+| Teammate choice | AI controls | What changes between matches |
+| --- | --- | --- |
+| Random teammate | One character | A different human can occupy the teammate role each match |
+| Regular teammate (you) | One character | The reported teammate account ID stays fixed across this session |
+| AI controls both | Both allied characters | One shared policy makes a separate decision for each character |
+| Game bot | One character | The game controls the ally; useful for offline bot training |
+
+Bot-training teams default to a game-bot ally. Online teams default to a random teammate. The menu saves this choice along with the role assignments. For a regular teammate, enter their Brawlhalla account ID or let the client pin the first reported teammate ID. Missing or changed regular-teammate IDs stop the session. Random teammates can change identity at new-match boundaries. Every arrangement still requires stable roles within a match.
+
+For your regular-teammate setup, you keep the keyboard and the AI uses the secondary controller slot. Set the player keys to the actual provider assignment; for example, the AI might be `Player2` and you `Player1`. The menu does not infer player keys from the physical device order.
+
+The uploaded game code recognizes the Steam launch option `-multikeyboard` and contains device-specific keyboard IDs and mappings. That helps with multiple-keyboard arrangements. It does not make ordinary `pynput`/Windows `SendInput` events target a particular keyboard. A keyboard plus a secondary controller is also a valid arrangement for the provider to implement. The client accepts distinct input-route declarations rather than assuming all characters share one keyboard stream; the Windows provider still needs to generate the actual device-specific input. This update does not install a virtual controller or keyboard driver, edit your Steam launch options, or implement the live Windows provider.
+
+In **AI controls both**, each character sees its own self/teammate perspective and has a separate four-observation history. The shared policy predicts both actions as a batch, then sends one atomic joint command for one world transition. It never advances the match once per character. Both actors receive the team reward, while session statistics count the shared match once. Training-step budgets count actor decisions: one joint world step supplies two decisions.
+
+The existing team checkpoint can resume with one or two controlled actors because each actor keeps the same observation and action layout. Changing teammate arrangements does not change the neural-network input size. Policy weights are shared; learning with a regular person does not create an automatic per-person behavior model. Repeated practice may adapt the policy to that person's habits, and mixing partners helps evaluate whether those skills generalize. Use a separate model folder if you want to preserve a personalized branch.
 
 ## Session controls
 
@@ -90,10 +109,12 @@ Examples once a matching protocol-2 provider exists:
 .\.venv\Scripts\python.exe agent.py session --profile bot_training --steps 0
 .\.venv\Scripts\python.exe agent.py session --profile human_duel --steps 0
 .\.venv\Scripts\python.exe agent.py session --profile online_duel --steps 0
-.\.venv\Scripts\python.exe agent.py session --profile online_teams --steps 0
+.\.venv\Scripts\python.exe agent.py session --profile online_teams --teammate-kind random --steps 0
+.\.venv\Scripts\python.exe agent.py session --profile online_teams --teammate-kind regular --self-player Player2 --teammate-player Player1 --steps 0
+.\.venv\Scripts\python.exe agent.py session --profile online_teams --teammate-kind ai --steps 0
 .\.venv\Scripts\python.exe agent.py session --profile bot_training --format 2v2 --friendly-fire --steps 0
 ```
 
 Ctrl+C stops console sessions and saves initialized learning models. `--no-learn` runs evaluation. `--max-seconds 3600` supplies a one-hour limit. For non-default rosters use `--self-player`, `--teammate-player`, and `--opponents`; the provider must acknowledge the exact assignment.
 
-The original `capture`, `observe`, `train`, and `play` commands remain available. The original `train --source bridge` uses protocol 1 and a two-player, 10-feature environment. Session presets use protocol 2 and the shared team/history representation. See the [session provider contract](session-provider.md).
+The original `capture`, `observe`, `train`, and `play` commands remain available. The original `train --source bridge` uses protocol 1 and a two-player, 10-feature environment. Duel session presets use protocol 2; 2v2 session presets use protocol 3 to acknowledge teammate arrangements and input ownership. Both session formats share the same team/history representation. See the [session provider contract](session-provider.md) and [team-control extension](team-control-provider.md).
