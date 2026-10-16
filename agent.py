@@ -183,8 +183,22 @@ def run_policy(args, config, source, self_slot, opponent_slot):
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv or argv[0] == 'menu':
+        menu_parser = argparse.ArgumentParser(description='Choose a game mode and session settings.')
+        menu_parser.add_argument('--config', default='config.json')
+        menu_args = menu_parser.parse_args(argv[1:] if argv else [])
+        try:
+            from mode_menu import open_menu
+            return open_menu(menu_args.config)
+        except (ImportError, RuntimeError, OSError) as error:
+            print(f'Cannot open mode menu: {error}. Run this on your Windows desktop with Tk support.', file=sys.stderr)
+            return 2
+    if argv[0] == 'session':
+        from session_runner import main as session_main
+        return session_main(argv[1:])
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=['doctor', 'capture', 'observe', 'train', 'play'])
+    parser.add_argument('mode', choices=['menu', 'session', 'doctor', 'capture', 'observe', 'train', 'play'])
     parser.add_argument('--source', choices=['visual', 'telemetry', 'bridge'])
     parser.add_argument('--config', default='config.json')
     parser.add_argument('--model', help='defaults to separate visual/state checkpoint paths')

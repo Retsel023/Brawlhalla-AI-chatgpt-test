@@ -28,10 +28,14 @@
     "host": "127.0.0.1",
     "port": 8765,
     "timeout_seconds": 3.0,
-    "expected_build": "11.00.36"
+    "expected_build": "11.00.36",
+    "episode_timeout_seconds": 120.0
   },
   "game": {
     "directory": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Brawlhalla",
     "expected_swf_sha256": "3b57541b92881ca8c0e6cb7b2f2d8661469e2c8734dbe8963dc72acd65bc30c5"
+  },
+  "sessions": {
+    "history_frames": 4
   }
 }

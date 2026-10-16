@@ -1,5 +1,7 @@
 # Brawlhalla learning agent
 
+Open the new mode menu on Windows with `.\.venv\Scripts\python.exe agent.py menu`. It includes human-versus-AI 1v1, continuous bot training, online human 1v1, and online 2v2 presets, plus learning, roster, checkpoint, and device settings. **Actual gameplay still requires a Windows game-side provider.** See [modes and shared skills](docs/session-modes.md) for setup, continuous sessions, 1v1-to-2v2 transfer, and current limitations.
+
 A local PPO agent with movement, jump, dodge, and attack actions. It now supports structured game-state observations and automatic damage rewards through a controlled-state bridge, alongside the original screenshot/human-feedback workflow. This is a development prototype, not a trained competitive player.
 
 The uploaded game files revealed a real JSON exporter, but its verified enable path is for spectating and it updates too slowly for frame-level control. The built-in exporter is supported in **observation mode**. The separate bridge training interface needs a Windows game-side provider that has not been implemented. This project currently contains no process-memory reader or game instrumentation. See [game-data findings](docs/game-data-findings.md) and the [bridge contract](docs/state-bridge.md).
