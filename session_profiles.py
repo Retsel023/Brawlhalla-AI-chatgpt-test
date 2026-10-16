@@ -1,8 +1,11 @@
 """Standard-library configuration for selectable Brawlhalla sessions."""
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import math
 from pathlib import Path
 import re
+
+from guidance_settings import validate_guidance
+from legends import normalize_legend
 
 PLAYER_SLOT = re.compile(r'Player[0-9]+\Z')
 PROFILE_PRESETS = {
@@ -125,9 +128,13 @@ class SessionOptions:
     initialize_from: str | None = None
     device: str = 'auto'
     max_seconds: float = 0
+    legend: str | None = None
+    guidance: dict = field(default_factory=dict)
 
     def __post_init__(self):
         object.__setattr__(self, 'profile', validate_profile(self.profile))
+        object.__setattr__(self, 'legend', normalize_legend(self.legend))
+        object.__setattr__(self, 'guidance', validate_guidance(self.guidance))
         if type(self.learning) is not bool:
             raise ValueError('learning must be a boolean')
         for name in ('steps', 'checkpoint_interval'):

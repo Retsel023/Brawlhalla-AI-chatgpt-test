@@ -103,16 +103,16 @@ class TeamSessionRunnerTests(unittest.TestCase):
         self.assertFalse(self.commands(random_provider, "step_joint"))
         before = PPO.load(str(self.checkpoint()), device="cpu")
         self.assertEqual(before.num_timesteps, 16)
-        self.assertEqual(before.observation_space.shape, (104,))
+        self.assertEqual(before.observation_space.shape, (210,))
 
         forward_batches = []
         policy_ids = set()
         original_forward = ActorCriticPolicy.forward
 
         def record_forward(policy, observations, *args, **kwargs):
-            if observations.shape == (2, 104):
+            if observations.shape == (2, 210):
                 policy_ids.add(id(policy))
-                forward_batches.append(observations[:, -26:].detach().cpu().clone())
+                forward_batches.append(observations[:, 78:104].detach().cpu().clone())
             return original_forward(policy, observations, *args, **kwargs)
 
         with patch.object(ActorCriticPolicy, "forward", record_forward):
@@ -127,7 +127,7 @@ class TeamSessionRunnerTests(unittest.TestCase):
             self.assertEqual(set(request["actions"]), {"Player1", "Player2"})
         resumed = PPO.load(str(self.checkpoint()), device="cpu")
         self.assertEqual(resumed.num_timesteps, 32)
-        self.assertEqual(resumed.observation_space.shape, (104,))
+        self.assertEqual(resumed.observation_space.shape, (210,))
         self.assertEqual(resumed.n_envs, 2)
         self.assertTrue(any(not torch.equal(value, resumed.policy.state_dict()[name])
                             for name, value in before.policy.state_dict().items()))

@@ -62,7 +62,7 @@ For online modes, a match ending is followed by a request to wait for the next p
 
 Both formats use the same 26-feature representation. The first ten features retain the legacy self/primary-opponent observations. Additional features describe a teammate and second opponent, their relative positions, presence masks, team format, and friendly-fire setting. Missing roles in 1v1 are zero-masked. Roles stay explicit and consistent throughout each match.
 
-The runner stacks four observations by default, giving the policy 104 inputs with a short history of positions and damage. That can support learning movement timing and action sequences. These features still omit detailed attack frames, weapon state, cooldowns, and velocities; they are not a complete combat model. A stack of recent observations is not an explicit combo library or a guarantee of good combos.
+The runner stacks four observations by default, giving the policy 104 state inputs with a short history of positions and damage. It then appends 106 tactical-goal features, for 210 inputs in total. These encode spacing preferences, a bounded input drill, and each actor's drill progress; they are shared in meaning across 1v1 and 2v2. See [language commands](language-commands.md). These features still omit detailed attack frames, weapon state, cooldowns, and velocities; they are not a complete combat model. Recent observations and an input drill do not establish a verified game combo.
 
 Models are organized by format:
 
@@ -84,6 +84,8 @@ This transfers learned policy weights, including any useful movement or action-t
 Metadata records model ancestry, checkpoint hashes, feature/action ordering, history length, and normalization/reward scales. Incompatible settings fail with an explanation. To change a contract deliberately, use a separate model folder rather than replacing an existing branch with incompatible data.
 
 ### Existing structured checkpoints
+
+Existing compatible 104-input session checkpoints automatically migrate when loaded by the new runner. All state-input weights are preserved, and the new goal-input weights start at zero. The migration retains the timestep count and starts a fresh optimizer; subsequent guided resumes preserve the optimizer. A migrated policy needs training before it can reliably respond to the goal features. Evaluation does not rewrite the old checkpoint.
 
 For an existing 10-feature structured model from the earlier runner, initialize a new duel branch explicitly:
 

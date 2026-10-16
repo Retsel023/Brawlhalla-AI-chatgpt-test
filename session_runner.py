@@ -24,7 +24,7 @@ class StopControl:
         return self.reason is not None
 
 
-def state_contract(config):
+def state_contract(config, *, guided=False):
     state = config.get('state', {})
     history = config.get('sessions', {}).get('history_frames', 4)
     if type(history) is not int or not 1 <= history <= 16:
@@ -36,15 +36,20 @@ def state_contract(config):
     for name in ('position_scale', 'damage_scale', 'damage_reward_scale'):
         from game_state import _positive_scale
         _positive_scale(contract[name], name)
+    if guided:
+        from guidance_settings import GUIDANCE_SCHEMA, GUIDANCE_FEATURE_NAMES
+        contract.update(guidance_schema=GUIDANCE_SCHEMA,
+                        guidance_features=list(GUIDANCE_FEATURE_NAMES))
     return contract
 
 
-def _progress(model, options, lineage, *, session_steps, episodes):
+def _progress(model, options, lineage, *, session_steps, episodes, guidance=None):
     return {'profile': options.profile['profile'], 'match_format': options.profile['match_format'],
             'teammate_kind': options.profile['teammate_kind'],
             'controlled_players': list(controlled_slots(options.profile)),
             'learning': options.learning, 'session_steps': session_steps,
             'model_timesteps': int(model.num_timesteps), 'episodes': episodes,
+            'guidance': options.guidance if guidance is None else guidance,
             'model_origin': lineage.get('strategy', 'unknown')}
 
 
@@ -60,7 +65,8 @@ def _make_callback(store, branch, lineage, options, contract, stop, start_steps)
         def save(self):
             steps = int(self.model.num_timesteps - start_steps)
             lineage['last_session'] = _progress(self.model, options, lineage,
-                                                 session_steps=steps, episodes=self.episodes)
+                                                 session_steps=steps, episodes=self.episodes,
+                                                 guidance=getattr(self.training_env, 'guidance', options.guidance))
             path = store.save(self.model, branch, lineage, contract=contract)
             print('Checkpoint saved:', path, json.dumps(lineage['last_session']), flush=True)
 
@@ -82,7 +88,8 @@ def _make_callback(store, branch, lineage, options, contract, stop, start_steps)
     return SessionCallback()
 
 
-def run_session(options, config, *, stop_file=None, check_only=False, model_kwargs=None):
+def run_session(options, config, *, stop_file=None, check_only=False, model_kwargs=None,
+                guidance_file=None):
     """Run client capabilities; a real Windows game-side provider is required."""
     from model_store import ModelStore
     from session_bridge import SessionBridgeClient, SessionEnv
@@ -125,10 +132,13 @@ def run_session(options, config, *, stop_file=None, check_only=False, model_kwar
             raise ValueError('Provider controlled_player does not match the selected self_player.')
         if getattr(client, 'input_routes', None):
             print('Provider input routes:', json.dumps(client.input_routes), flush=True)
+        if options.legend is not None:
+            client.request_legend(options.legend)
+            print('Requested primary-player legend:', options.legend, flush=True)
         if check_only:
             print('Provider handshake passed. No session was configured and no game actions were requested.', flush=True)
             return 0
-        contract = state_contract(config)
+        contract = state_contract(config, guided=True)
         hold_seconds = config.get('step_seconds', 0.1)
         parameters = {'hold_seconds': hold_seconds, 'position_scale': contract['position_scale'],
                       'damage_scale': contract['damage_scale'],
@@ -138,13 +148,19 @@ def run_session(options, config, *, stop_file=None, check_only=False, model_kwar
             base_env = DualTeamVecEnv(client, options.profile, **parameters)
         else:
             base_env = DummyVecEnv([lambda: SessionEnv(client, options.profile, **parameters)])
-        env = VecFrameStack(base_env, n_stack=contract['history_frames'])
+        stacked = VecFrameStack(base_env, n_stack=contract['history_frames'])
+        from tactical_guidance import TacticalGuidanceVecEnv
+        env = TacticalGuidanceVecEnv(stacked, options.guidance, guidance_file=guidance_file,
+                                    position_scale=contract['position_scale'], learning=options.learning)
         store = ModelStore(options.model_root, model_kwargs=model_kwargs)
         model, lineage = store.load_or_create(
             env, branch, device=choose_device(options.device), initialize_from=options.initialize_from,
             evaluation=not options.learning, contract=contract)
+        env.shaping_gamma = float(model.gamma)
         start_steps = int(model.num_timesteps)
         print('Model:', store.path_for(branch), 'origin:', json.dumps(lineage), flush=True)
+        print('Tactical goals:', json.dumps(options.guidance), flush=True)
+        print('Suggestions guide learning. Reliable responses require practice; input drills are not verified game combos.', flush=True)
         if options.learning:
             callback = _make_callback(store, branch, lineage, options, contract, stop, start_steps)
             rollout = max(1, int(model.n_steps) * int(model.n_envs))
@@ -205,6 +221,8 @@ def _parser():
     parser.add_argument('--initialize-from', help='compatible source checkpoint for a new branch')
     parser.add_argument('--device', choices=['auto', 'cpu', 'cuda'])
     parser.add_argument('--max-seconds', type=float, help='0 has no time limit')
+    parser.add_argument('--legend', help='primary AI legend; requires provider legend_selection support')
+    parser.add_argument('--guidance-file', type=Path, help='live tactical guidance JSON (updated atomically)')
     parser.add_argument('--stop-file', type=Path, help='stop cleanly if this file exists')
     parser.add_argument('--check', action='store_true', help='handshake only; no session/game actions')
     parser.add_argument('--dry-run', action='store_true', help='validate and show settings without dependencies or a provider')
@@ -220,7 +238,7 @@ def main(argv=None):
             raise ValueError('config sessions must be an object')
         fields = ('match_format', 'self_player', 'teammate_player', 'teammate_kind',
                   'teammate_account_id', 'opponents', 'friendly_fire',
-                  'learning', 'steps', 'checkpoint_interval', 'model_root', 'initialize_from', 'device', 'max_seconds')
+                  'learning', 'steps', 'checkpoint_interval', 'model_root', 'initialize_from', 'device', 'max_seconds', 'legend')
         overrides = {name: getattr(args, name) for name in fields if getattr(args, name) is not None}
         if args.session_file is not None:
             if args.profile is not None or overrides:
@@ -234,7 +252,8 @@ def main(argv=None):
         # Windows Ctrl+Break is also a graceful stop for console sessions.
         if hasattr(signal, 'SIGBREAK'):
             signal.signal(signal.SIGBREAK, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
-        return run_session(options, config, stop_file=args.stop_file, check_only=args.check)
+        return run_session(options, config, stop_file=args.stop_file, check_only=args.check,
+                           guidance_file=args.guidance_file)
     except KeyboardInterrupt:
         print('Session interrupted.', file=sys.stderr)
         return 130

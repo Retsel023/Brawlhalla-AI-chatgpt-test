@@ -30,6 +30,12 @@ Online sessions require `mode: "online_controlled"`. The declared build must mat
 
 The response supplies a nonempty `session_id` and echoes all eight profile fields exactly. Profile names and constraints are defined in `session_profiles.py`; the provider must arrange or verify that real session, not merely echo configuration without applying it. A configured client cannot switch profiles. A mode change creates a new client.
 
+### Optional primary-player legend
+
+When a legend preference is supplied, hello must additionally advertise `legend_selection`. Both `configure` and `next_episode` requests then include `"legend":"Hattori"` (or another canonical name from `legends.py`). Configure acknowledgments and every state response must echo that exact `legend` value. The provider must actually select the primary AI's legend before returning a playable match, and must reject unavailable or locked legends. It must not report selection merely because the requested name is known. A missing capability or acknowledgment fails the client before further actions.
+
+This extension does not select a second AI teammate's legend. Omitting a preference preserves the previous protocol behavior. Legend changes require a new session; tactical language guidance is handled locally by the policy wrapper and adds no provider commands.
+
 ## Wait for a playable match
 
 ```json

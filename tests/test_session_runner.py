@@ -144,7 +144,8 @@ class SessionRunnerIntegrationTests(unittest.TestCase):
         original_duel_metadata = duel_path.with_suffix('.json').read_bytes()
         duel_model = PPO.load(str(duel_path), device='cpu')
         self.assertEqual(duel_model.num_timesteps, 16)
-        self.assertEqual(duel_model.observation_space.shape, (104,))
+        self.assertEqual(duel_model.observation_space.shape, (210,))
+        self.assertEqual(self.metadata('duel')['contract']['guidance_schema'], 'tactical-v1')
         self.assertGreaterEqual(duel_provider.episode, 2)
         self.assertEqual(self.metadata('duel')['last_session']['session_steps'], 16)
         self.assertEqual(self.metadata('duel')['last_session']['model_origin'], 'new')
@@ -179,6 +180,47 @@ class SessionRunnerIntegrationTests(unittest.TestCase):
         self.assertEqual(duel_path.with_suffix('.json').read_bytes(), original_duel_metadata)
         self.assertEqual(file_hash(team_path), before_teams_hash)
         self.assertIn('model weights were not saved or changed', self.output.getvalue())
+
+    def test_live_language_command_reaches_next_policy_decision_and_checkpoint(self):
+        from guidance_io import write_guidance
+        from language_commands import interpret_command
+        from stable_baselines3.common.policies import ActorCriticPolicy
+        from test_language_commands import OllamaFixture
+
+        options = self.options(guidance={'opponent_spacing': 'close'})
+        guidance_file = self.directory / 'guidance.json'
+        write_guidance(guidance_file, options.guidance)
+        language = OllamaFixture({'message': 'Keep distance and practise the input drill.',
+                                  'needs_clarification': False,
+                                  'patch': {'guidance': {'opponent_spacing': 'far',
+                                                         'combo': ['down_light', 'jump_light']}}})
+        self.addCleanup(language.close)
+        sent = []
+        observations = []
+        original = ActorCriticPolicy.forward
+
+        def command_during_match(request, response):
+            if request['command'] == 'step' and not sent:
+                result = interpret_command('Keep more distance and practise down light then jump light',
+                                           options, language.config(timeout_seconds=2))
+                write_guidance(guidance_file, result.options.guidance)
+                sent.append(result)
+            return response
+
+        def record_observation(policy, observation, *args, **kwargs):
+            observations.append(observation.detach().cpu().clone())
+            return original(policy, observation, *args, **kwargs)
+
+        provider = self.provider(options, alter=command_during_match)
+        with patch.object(ActorCriticPolicy, 'forward', record_observation):
+            result, _ = self.run_options(options, provider=provider, guidance_file=guidance_file)
+        self.assertEqual(result, 0)
+        self.assertEqual(len(sent), 1)
+        self.assertTrue(sent[0].changed)
+        self.assertEqual(language.requests[0]['path'], '/api/chat')
+        self.assertEqual(observations[0][0, 105], 1)  # Initial close-spacing goal.
+        self.assertEqual(observations[1][0, 107], 1)  # New far goal after first action.
+        self.assertEqual(self.metadata('duel')['last_session']['guidance'], sent[0].options.guidance)
 
     def test_unlimited_training_stops_by_file_releases_and_saves_progress(self):
         from stable_baselines3 import PPO

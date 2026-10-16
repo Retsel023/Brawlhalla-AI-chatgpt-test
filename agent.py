@@ -197,8 +197,11 @@ def main(argv=None):
     if argv[0] == 'session':
         from session_runner import main as session_main
         return session_main(argv[1:])
+    if argv[0] == 'command':
+        from language_cli import main as command_main
+        return command_main(argv[1:])
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=['menu', 'session', 'doctor', 'capture', 'observe', 'train', 'play'])
+    parser.add_argument('mode', choices=['menu', 'session', 'command', 'doctor', 'capture', 'observe', 'train', 'play'])
     parser.add_argument('--source', choices=['visual', 'telemetry', 'bridge'])
     parser.add_argument('--config', default='config.json')
     parser.add_argument('--model', help='defaults to separate visual/state checkpoint paths')

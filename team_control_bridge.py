@@ -127,6 +127,7 @@ class TeamControlClient(SessionBridgeClient):
         return session_id
 
     def _acknowledged_profile(self, response):
+        self._validate_legend_ack(response)
         # Protocol 3 requires explicit echoes of the new teammate fields. The
         # legacy validator's defaults cannot stand in for a provider's consent.
         try:

@@ -2,6 +2,8 @@
 
 Open the new mode menu on Windows with `.\.venv\Scripts\python.exe agent.py menu`. It includes human-versus-AI 1v1, continuous bot training, online human 1v1, and online 2v2 presets, plus learning, roster, checkpoint, and device settings. **Actual gameplay still requires a Windows game-side provider.** See [modes and shared skills](docs/session-modes.md) for setup, continuous sessions, 1v1-to-2v2 transfer, and current limitations.
 
+The menu also accepts local language commands through Ollama, such as “Play as Hattori”, “Keep more distance”, or “Stay near your teammate”. The model produces validated session settings and practice guidance; the PPO policy chooses the game actions. Start with `ollama pull qwen2.5:3b`, then open `agent.py menu`. See [local language commands](docs/language-commands.md) for Windows setup, live guidance, legend selection, and the limits of combo practice. Actual Ollama inference and RX 9070 XT acceleration have not been verified here.
+
 In 2v2, choose a random teammate, a regular teammate such as you, a game bot, or **AI controls both**. Dual AI uses shared policy weights with separate observations, histories, and simultaneous action streams. Your regular-teammate input arrangement can remain **you on keyboard, AI on the secondary controller**; the provider must implement that routing. See the [team-control protocol](docs/team-control-provider.md).
 
 A local PPO agent with movement, jump, dodge, and attack actions. It now supports structured game-state observations and automatic damage rewards through a controlled-state bridge, alongside the original screenshot/human-feedback workflow. This is a development prototype, not a trained competitive player.

@@ -54,6 +54,8 @@ class SessionBridgeClient(StateBridgeClient):
         self.session_id = None
         self._profile = None
         self._seen_episodes = set()
+        self.capabilities = set()
+        self._legend = None
 
     @property
     def expected_profile(self):
@@ -92,6 +94,7 @@ class SessionBridgeClient(StateBridgeClient):
             self.provider_mode = mode
             self.game_build = build
             self.controlled_player = controlled
+            self.capabilities = set(capabilities)
             return self
         except OSError as error:
             self.close()
@@ -100,7 +103,29 @@ class SessionBridgeClient(StateBridgeClient):
             self.close()
             raise
 
+    def request_legend(self, legend):
+        """Require provider support before sending a legend preference.
+
+        Only the primary controlled player is affected. The provider must select
+        the legend before a playable next_episode and echo it in all states.
+        """
+        from legends import normalize_legend
+        requested = normalize_legend(legend)
+        self.connect()
+        if self._profile is not None:
+            self.close()
+            raise BridgeError('Legend selection must happen before session configuration')
+        if requested is not None and 'legend_selection' not in self.capabilities:
+            self.close()
+            raise BridgeError('Provider does not support legend_selection; no legend was selected')
+        self._legend = requested
+
+    def _validate_legend_ack(self, response):
+        if self._legend is not None and response.get('legend') != self._legend:
+            raise BridgeError('Provider did not acknowledge the requested primary-player legend')
+
     def _acknowledged_profile(self, response):
+        self._validate_legend_ack(response)
         try:
             actual = validate_profile({field: response[field] for field in PROFILE_FIELDS})
         except (KeyError, ValueError) as error:
@@ -126,7 +151,8 @@ class SessionBridgeClient(StateBridgeClient):
             if self.controlled_player != requested["self_player"]:
                 raise BridgeError("hello: controlled_player does not match the selected self_player")
             self._profile = copy.deepcopy(requested)
-            response = self._request("configure", **requested)
+            selection = {'legend': self._legend} if self._legend is not None else {}
+            response = self._request("configure", **requested, **selection)
             self._acknowledged_profile(response)
             session_id = response.get("session_id")
             if not isinstance(session_id, str) or not session_id.strip():
@@ -161,8 +187,9 @@ class SessionBridgeClient(StateBridgeClient):
         request_timeout = self.timeout
         try:
             self.timeout = self.episode_timeout
+            selection = {'legend': self._legend} if self._legend is not None else {}
             response = self._request("next_episode", session_id=self.session_id,
-                                     after_episode_id=after, seed=seed, **self._profile)
+                                     after_episode_id=after, seed=seed, **self._profile, **selection)
             snapshot = self._snapshot(response)
             if snapshot.episode_id in self._seen_episodes:
                 raise BridgeError("next_episode: provider must return a globally new episode_id within this session")

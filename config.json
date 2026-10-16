@@ -37,5 +37,11 @@
   },
   "sessions": {
     "history_frames": 4
+  },
+  "language_commands": {
+    "endpoint": "http://127.0.0.1:11434",
+    "model": "qwen2.5:3b",
+    "timeout_seconds": 30,
+    "max_response_bytes": 65536
   }
 }

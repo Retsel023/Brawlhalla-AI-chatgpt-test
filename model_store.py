@@ -45,12 +45,41 @@ def _observation_size(env):
             or space.dtype.kind != "f"):
         raise ValueError("Session policies require flat floating-point team-state observations, not CNN pixels.")
     size = space.shape[0]
-    if size < len(DEFAULT_FEATURE_NAMES) or size % len(DEFAULT_FEATURE_NAMES):
-        raise ValueError("Session observations must contain 26 features per history frame.")
     if (not isinstance(action, spaces.Discrete) or action.n != len(ACTIONS)
             or action.start != 0):
         raise ValueError("Checkpoint action space must match the existing Brawlhalla action ordering.")
     return size
+
+
+def _guidance_features(contract):
+    """Guidance is an explicit suffix contract, never inferred by divisibility."""
+    if "guidance_schema" not in contract and "guidance_features" not in contract:
+        return ()
+    from guidance_settings import GUIDANCE_FEATURE_NAMES, GUIDANCE_SCHEMA
+    if (contract.get("guidance_schema") != GUIDANCE_SCHEMA
+            or contract.get("guidance_features") != list(GUIDANCE_FEATURE_NAMES)):
+        raise ValueError("Unsupported guidance schema or guidance feature ordering.")
+    return tuple(GUIDANCE_FEATURE_NAMES)
+
+
+def _contract_for_size(contract, size):
+    if contract is not None and not isinstance(contract, dict):
+        raise ValueError("Observation contract must be a JSON object.")
+    state_size = size - len(_guidance_features(contract or {}))
+    if state_size < len(DEFAULT_FEATURE_NAMES) or state_size % len(DEFAULT_FEATURE_NAMES):
+        raise ValueError("Session observations must contain 26 features per history frame, "
+                         "followed by any declared guidance features.")
+    return _contract(contract, state_size // len(DEFAULT_FEATURE_NAMES))
+
+
+def _without_guidance(contract):
+    return {name: value for name, value in contract.items()
+            if name not in ("guidance_schema", "guidance_features")}
+
+
+def _guidance_upgrade(source, target):
+    return (not _guidance_features(source) and bool(_guidance_features(target))
+            and source == _without_guidance(target))
 
 
 def _contract(contract, frames):
@@ -71,6 +100,7 @@ def _contract(contract, frames):
         result.update(deepcopy(contract))
     if result["observation_schema"] != OBSERVATION_SCHEMA:
         raise ValueError("Unsupported observation schema; expected team-v2.")
+    _guidance_features(result)
     if (isinstance(result["history_frames"], bool)
             or not isinstance(result["history_frames"], int)
             or result["history_frames"] != frames):
@@ -159,6 +189,37 @@ class ModelStore:
                 "source_path": str(source.resolve()) if source is not None else None,
                 "source_sha256": source_hash}
 
+    def _transfer(self, old, env, device, *, input_start=None):
+        """Copy trusted MLP weights, zeroing every newly introduced input."""
+        model = self._new(env, device, policy_kwargs=old.policy_kwargs)
+        old_weights = old.policy.state_dict()
+        new_weights = model.policy.state_dict()
+        first_layers = {"mlp_extractor.policy_net.0.weight", "mlp_extractor.value_net.0.weight"}
+        if set(old_weights) != set(new_weights):
+            raise ValueError("Unsupported policy architecture: checkpoint parameter names differ.")
+        old_size = old.observation_space.shape[0]
+        for name, tensor in old_weights.items():
+            if input_start is not None and name in first_layers:
+                target = new_weights[name].clone().zero_()
+                if (target.shape[0] != tensor.shape[0] or tensor.shape[1] != old_size
+                        or input_start < 0 or input_start + old_size > target.shape[1]):
+                    raise ValueError("Unsupported initial actor/value layer architecture.")
+                target[:, input_start:input_start + old_size] = tensor
+                new_weights[name] = target
+            elif tensor.shape != new_weights[name].shape:
+                raise ValueError(f"Incompatible checkpoint architecture at {name}.")
+            else:
+                new_weights[name] = tensor.detach().clone()
+        model.policy.load_state_dict(new_weights, strict=True)
+        return model
+
+    def _initialization_lineage(self, strategy, match_format, contract, source):
+        lineage = self._lineage(strategy, match_format, contract, source, _sha256(source))
+        lineage.update(initialization_strategy=strategy,
+                       initialization_source_path=lineage["source_path"],
+                       initialization_source_sha256=lineage["source_sha256"])
+        return lineage
+
     def load_or_create(self, env, match_format, device="cpu", initialize_from=None,
                        evaluation=False, contract=None):
         """Resume this branch, or initialize a fresh optimizer from trusted weights.
@@ -166,17 +227,34 @@ class ModelStore:
         A new teams branch automatically inherits a compatible duel branch.
         Explicit legacy 10/26-feature initialization supports history expansion;
         old weights read the newest frame and ignore earlier history initially.
+        Declared tactical guidance follows all state history. An existing
+        nonguided branch gains zero-weight goal inputs and a fresh optimizer,
+        retaining its timestep count; files change only on a subsequent save.
         """
         from stable_baselines3 import PPO
         size = _observation_size(env)
-        normalized = _contract(contract, size // len(DEFAULT_FEATURE_NAMES))
+        normalized = _contract_for_size(contract, size)
+        state_size = len(DEFAULT_FEATURE_NAMES) * normalized["history_frames"]
         destination = self.path_for(match_format)
         if destination.exists():
             if initialize_from is not None:
                 raise ValueError("initialize_from is allowed only for a new branch; existing branch progress must resume.")
             metadata = self._metadata(destination)
-            if metadata.get("match_format") != match_format or metadata["contract"] != normalized:
+            if metadata.get("match_format") != match_format:
                 raise ValueError("Saved checkpoint contract differs from this session; preserve the branch and use a separate model store.")
+            if metadata["contract"] != normalized:
+                old = PPO.load(str(destination), device=device)
+                _check_policy(old, allowed_sizes=(state_size,))
+                source_contract = _contract_for_size(metadata["contract"],
+                                                     old.observation_space.shape[0])
+                if not _guidance_upgrade(source_contract, normalized):
+                    raise ValueError("Saved checkpoint contract differs from this session; preserve the branch and use a separate model store.")
+                model = self._transfer(old, env, device, input_start=0)
+                # Keep accumulated progress while Adam starts fresh for the new input shape.
+                model.num_timesteps = old.num_timesteps
+                lineage = self._initialization_lineage(
+                    "migrated_guidance", match_format, normalized, destination)
+                return model, lineage
             model = PPO.load(str(destination), env=env, device=device)
             _check_policy(model, allowed_sizes=(size,))
             lineage = self._lineage("resumed", match_format, normalized,
@@ -202,48 +280,41 @@ class ModelStore:
             return self._new(env, device), self._lineage("new", match_format, normalized)
         metadata = self._metadata(source, required=not explicit)
         old = PPO.load(str(source), device=device)
-        _check_policy(old, allowed_sizes=(size, 10, 26))
+        _check_policy(old, allowed_sizes=(size, state_size, 10, 26))
         old_size = old.observation_space.shape[0]
-        migrating = old_size != size
-        if migrating and (not explicit or old_size not in (10, 26) or old_size > size):
-            raise ValueError("Only explicit legacy 10/26-feature policies can expand into the newest history frame.")
+        input_start = None
+        strategy = "warm_started"
         if metadata is not None:
-            source_contract = deepcopy(metadata["contract"])
-            if migrating and old_size == 26:
-                source_contract["history_frames"] = normalized["history_frames"]
-            if source_contract != normalized:
+            source_contract = _contract_for_size(metadata["contract"], old_size)
+            if source_contract == normalized:
+                pass
+            elif _guidance_upgrade(source_contract, normalized):
+                input_start, strategy = 0, "migrated_guidance"
+            elif explicit and old_size == 26 and not _guidance_features(source_contract):
+                # A documented one-frame predecessor reads only the latest state frame.
+                expanded = {**source_contract, "history_frames": normalized["history_frames"]}
+                if expanded != _without_guidance(normalized):
+                    raise ValueError("Initialization checkpoint contract differs from this session.")
+                input_start, strategy = state_size - 26, "migrated_legacy"
+            else:
                 raise ValueError("Initialization checkpoint contract differs from this session.")
         else:
-            known = _contract(None, size // 26)
+            known = _contract(None, normalized["history_frames"])
             known_fields = ("feature_names", "history_order", "position_scale", "damage_scale",
                             "damage_reward_scale", "slot_semantics", "action_names")
             if (any(normalized[name] != known[name] for name in known_fields)
                     or tuple(normalized["feature_names"][:10]) != tuple(LEGACY_FEATURE_NAMES)):
                 raise ValueError("Legacy checkpoints without metadata require the defined code feature ordering and default scales.")
-        model = self._new(env, device, policy_kwargs=old.policy_kwargs)
-        old_weights = old.policy.state_dict()
-        new_weights = model.policy.state_dict()
-        first_layers = {"mlp_extractor.policy_net.0.weight", "mlp_extractor.value_net.0.weight"}
-        if set(old_weights) != set(new_weights):
-            raise ValueError("Unsupported policy architecture: checkpoint parameter names differ.")
-        for name, tensor in old_weights.items():
-            if migrating and name in first_layers:
-                target = new_weights[name].clone().zero_()
-                if target.shape[0] != tensor.shape[0] or tensor.shape[1] != old_size:
-                    raise ValueError("Unsupported initial actor/value layer architecture.")
-                start = size - 26
-                target[:, start:start + old_size] = tensor
-                new_weights[name] = target
-            elif tensor.shape != new_weights[name].shape:
-                raise ValueError(f"Incompatible checkpoint architecture at {name}.")
+            if old_size == size and not _guidance_features(normalized):
+                pass
+            elif old_size in (10, 26) and old_size <= state_size:
+                input_start, strategy = state_size - 26, "migrated_legacy"
+            elif old_size == state_size and _guidance_features(normalized):
+                input_start, strategy = 0, "migrated_guidance"
             else:
-                new_weights[name] = tensor.detach().clone()
-        model.policy.load_state_dict(new_weights, strict=True)
-        strategy = "migrated_legacy" if migrating else "warm_started"
-        lineage = self._lineage(strategy, match_format, normalized, source, _sha256(source))
-        lineage.update(initialization_strategy=strategy,
-                       initialization_source_path=lineage["source_path"],
-                       initialization_source_sha256=lineage["source_sha256"])
+                raise ValueError("Legacy checkpoint dimensions cannot establish the required observation contract.")
+        model = self._transfer(old, env, device, input_start=input_start)
+        lineage = self._initialization_lineage(strategy, match_format, normalized, source)
         return model, lineage
 
     def save(self, model, match_format, lineage, contract=None):
@@ -257,11 +328,12 @@ class ModelStore:
         _check_policy(model, allowed_sizes=(size,))
         if not isinstance(lineage, dict) or lineage.get("match_format") != match_format:
             raise ValueError("Lineage must belong to the destination match format.")
-        normalized = _contract(contract if contract is not None else lineage.get("contract"), size // 26)
+        normalized = _contract_for_size(
+            contract if contract is not None else lineage.get("contract"), size)
         if lineage.get("contract") != normalized:
             raise ValueError("Saving cannot change the checkpoint observation contract.")
         source = lineage.get("source_path")
-        if (source is not None and lineage.get("strategy") != "resumed"
+        if (source is not None and lineage.get("strategy") not in ("resumed", "migrated_guidance")
                 and Path(source).resolve() == destination.resolve()):
             raise ValueError("Saving a warm start must never overwrite its source checkpoint.")
         destination.parent.mkdir(parents=True, exist_ok=True)

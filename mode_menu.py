@@ -10,6 +10,7 @@ import threading
 import uuid
 
 from session_profiles import PROFILE_PRESETS, SessionOptions, default_options, default_teammate_kind
+from guidance_io import write_guidance
 
 TEAMMATE_LABELS = {'none': 'No teammate', 'random': 'Random teammate',
                    'regular': 'Regular teammate (you)', 'ai': 'AI controls both', 'bot': 'Game bot'}
@@ -42,7 +43,8 @@ def build_options(form):
         checkpoint_interval=int(form.get('checkpoint_interval', 1000)),
         model_root=form.get('model_root', 'models/sessions').strip(),
         initialize_from=form.get('initialize_from', '').strip() or None,
-        device=form.get('device', 'auto'))
+        device=form.get('device', 'auto'), legend=(form.get('legend') or '').strip() or None,
+        guidance=form.get('guidance'))
 
 
 def options_to_form(options):
@@ -52,6 +54,7 @@ def options_to_form(options):
     form['teammate_player'] = form['teammate_player'] or 'Player2'
     form['teammate_account_id'] = '' if form['teammate_account_id'] is None else str(form['teammate_account_id'])
     form['initialize_from'] = form['initialize_from'] or ''
+    form['legend'] = form['legend'] or ''
     return form
 
 
@@ -65,7 +68,7 @@ class SessionProcess:
         self.command_builder = command_builder
         self.process = None
         self.reader = None
-        self.run_dir = self.options_path = self.stop_path = None
+        self.run_dir = self.options_path = self.stop_path = self.guidance_path = None
         self.output = queue.Queue(maxsize=1000)
         self.check = self.stop_requested = self.forced = False
 
@@ -77,11 +80,13 @@ class SessionProcess:
         self.run_dir = self.runs_root / uuid.uuid4().hex
         self.run_dir.mkdir(parents=True, exist_ok=False)
         self.options_path, self.stop_path = self.run_dir / 'options.json', self.run_dir / 'stop.request'
+        self.guidance_path = self.run_dir / 'guidance.json'
+        write_guidance(self.guidance_path, options.guidance)
         self.options_path.write_text(json.dumps(options.to_dict(), indent=2) + '\n', encoding='utf-8')
         self.check, self.stop_requested, self.forced = check, False, False
         command = [sys.executable, '-u', str(self.repo / 'agent.py'), 'session',
                    '--session-file', str(self.options_path), '--config', str(self.config),
-                   '--stop-file', str(self.stop_path)]
+                   '--stop-file', str(self.stop_path), '--guidance-file', str(self.guidance_path)]
         if check:
             command.append('--check')
         if self.command_builder:
@@ -134,6 +139,11 @@ class SessionProcess:
             self.stop_path.touch(exist_ok=True)
             self.stop_requested = True
 
+    def update_guidance(self, guidance):
+        if self.process is None or self.poll() is not None or self.check or self.stop_requested:
+            raise RuntimeError('No active combat session can receive this suggestion')
+        write_guidance(self.guidance_path, guidance)
+
     def force_stop(self):
         if self.process is not None and self.poll() is None:
             self.process.kill()
@@ -147,6 +157,31 @@ class SessionProcess:
             except queue.Empty:
                 break
         return lines
+
+
+class LanguageCommandTask:
+    """Run model requests off the UI thread; deliver results through a queue."""
+
+    def __init__(self, text, options, config_path):
+        self.options = options
+        self.output = queue.Queue(maxsize=1)
+        self.thread = threading.Thread(target=self._run, args=(text, config_path), daemon=True)
+        self.thread.start()
+
+    def _run(self, text, config_path):
+        try:
+            from agent import load_config
+            from language_commands import interpret_command
+            result = interpret_command(text, self.options, load_config(config_path))
+            self.output.put((result, None))
+        except Exception as error:
+            self.output.put((None, str(error)))
+
+    def poll(self):
+        try:
+            return self.output.get_nowait()
+        except queue.Empty:
+            return None
 
 
 def open_menu(config_path='config.json'):
@@ -180,7 +215,8 @@ def open_menu(config_path='config.json'):
     initial = options_to_form(default_options())
     boolean_fields = {'learning', 'friendly_fire'}
     fields = {name: (tk.BooleanVar(value=value) if name in boolean_fields else tk.StringVar(value=value))
-              for name, value in initial.items() if name not in {'profile', 'online', 'opponent_kind'}}
+              for name, value in initial.items() if name not in {'profile', 'online', 'opponent_kind', 'guidance'}}
+    guidance = initial['guidance']
     widgets = {}
     captions = [('match_format', 'Bot match format'), ('learning', 'Update policy weights'),
                 ('steps', 'Steps (0 = continuous)'), ('max_seconds', 'Time limit in seconds (0 = unlimited)'),
@@ -188,6 +224,7 @@ def open_menu(config_path='config.json'):
                 ('teammate_kind', 'Teammate arrangement (2v2)'), ('teammate_account_id', 'Regular teammate account ID (optional)'),
                 ('teammate_player', 'Teammate key (2v2)'), ('opponents', 'Opponent keys (comma separated)'),
                 ('friendly_fire', 'Friendly fire (2v2)'), ('device', 'Device (cuda = AMD ROCm)'),
+                ('legend', 'Primary AI legend (optional)'),
                 ('model_root', 'Model folder'), ('initialize_from', 'Initialize from checkpoint (optional)')]
     for row, (name, caption) in enumerate(captions, 3):
         ttk.Label(panel, text=caption).grid(row=row, column=0, sticky='w', padx=(0, 12), pady=3)
@@ -220,9 +257,21 @@ def open_menu(config_path='config.json'):
     log.grid(row=actions_row + 2, column=0, columnspan=3, sticky='nsew')
     panel.rowconfigure(actions_row + 2, weight=1)
     running = closing = False
+    command_task = command_process = None
+    chat_window = chat_log = chat_entry = send_button = None
 
     def current_options():
-        return build_options({'profile': labels[selected.get()], **{name: value.get() for name, value in fields.items()}})
+        return build_options({'profile': labels[selected.get()], 'guidance': guidance,
+                              **{name: value.get() for name, value in fields.items()}})
+
+    def apply_options(options):
+        nonlocal guidance
+        values = options_to_form(options)
+        guidance = values['guidance']
+        selected.set(PROFILE_PRESETS[values['profile']]['label'])
+        for name, variable in fields.items():
+            variable.set(TEAMMATE_LABELS[values[name]] if name == 'teammate_kind' else values[name])
+        change_teammate()
 
     def refresh_fields():
         teams = fields['match_format'].get() == '2v2'
@@ -279,11 +328,7 @@ def open_menu(config_path='config.json'):
                 if not path:
                     return
                 options = SessionOptions.from_dict(json.loads(Path(path).read_text(encoding='utf-8')))
-                values = options_to_form(options)
-                selected.set(PROFILE_PRESETS[values['profile']]['label'])
-                for name, variable in fields.items():
-                    variable.set(TEAMMATE_LABELS[values[name]] if name == 'teammate_kind' else values[name])
-                change_teammate()
+                apply_options(options)
         except (ValueError, TypeError, KeyError, OSError) as error:
             messagebox.showerror('Session settings', str(error), parent=root)
 
@@ -322,9 +367,103 @@ def open_menu(config_path='config.json'):
         log.see('end')
         log.configure(state='disabled')
 
+    def chat_append(text):
+        if chat_log is not None and chat_log.winfo_exists():
+            chat_log.configure(state='normal')
+            chat_log.insert('end', text + '\n\n')
+            excess = int(chat_log.index('end-1c').split('.')[0]) - 300
+            if excess > 0:
+                chat_log.delete('1.0', f'{excess + 1}.0')
+            chat_log.see('end')
+            chat_log.configure(state='disabled')
+
+    def submit_command(_event=None):
+        nonlocal command_task, command_process
+        if command_task is not None:
+            return 'break'
+        text = chat_entry.get().strip()
+        if not text:
+            return 'break'
+        try:
+            options = current_options()
+            command_process = controller.process
+            command_task = LanguageCommandTask(text, options, config)
+            chat_append('You: ' + text)
+            chat_entry.delete(0, 'end')
+            send_button.configure(state='disabled')
+            status.set('Interpreting your command with the local language model…')
+        except (ValueError, TypeError, KeyError, OSError) as error:
+            chat_append('Command not applied: ' + str(error))
+        return 'break'
+
+    def show_chat():
+        nonlocal chat_window, chat_log, chat_entry, send_button
+        if chat_window is not None and chat_window.winfo_exists():
+            chat_window.lift()
+            return
+        chat_window = tk.Toplevel(root)
+        chat_window.title('Talk to the agent')
+        chat_window.geometry('720x500')
+        chat_window.minsize(500, 350)
+        ttk.Label(chat_window, text='Try “play as Hattori”, “keep more distance”, or “practise down light then jump light”. '
+                  'Tactical suggestions can update a running session. Stop before changing its setup. '
+                  'Responses improve through training; drills do not establish true game combos.',
+                  wraplength=680, padding=12).pack(fill='x')
+        chat_log = tk.Text(chat_window, height=12, state='disabled', wrap='word')
+        chat_log.pack(fill='both', expand=True, padx=12)
+        entry_panel = ttk.Frame(chat_window, padding=12)
+        entry_panel.pack(fill='x')
+        chat_entry = ttk.Entry(entry_panel)
+        chat_entry.pack(side='left', fill='x', expand=True)
+        chat_entry.bind('<Return>', submit_command)
+        send_button = ttk.Button(entry_panel, text='Send', command=submit_command,
+                                 state='disabled' if command_task else 'normal')
+        send_button.pack(side='left', padx=(8, 0))
+        chat_append('Run Ollama locally with the model selected in config.json. '
+                    'The default model can be installed with: ollama pull qwen2.5:3b')
+        chat_append('Current tactical goals: ' + json.dumps(guidance))
+        chat_entry.focus_set()
+
+    def finish_command(result, error):
+        nonlocal command_task
+        source = command_task.options
+        command_task = None
+        if send_button is not None and send_button.winfo_exists():
+            send_button.configure(state='normal')
+        try:
+            if error:
+                raise RuntimeError(error)
+            if result.needs_clarification:
+                chat_append('Agent: ' + result.message)
+                status.set('Command needs clarification; no settings changed.')
+                return
+            if source != current_options() or (running and controller.process is not command_process):
+                raise ValueError('Session settings changed while the model was replying. Send your command again.')
+            if running:
+                before, after = source.to_dict(), result.options.to_dict()
+                before.pop('guidance')
+                after.pop('guidance')
+                if before != after:
+                    raise ValueError('Stop the session before changing mode, legend, or other setup settings. No changes applied.')
+                if result.changed:
+                    controller.update_guidance(result.options.guidance)
+            apply_options(result.options)
+            message = result.message + (' Tactical goals were sent for the next decision.' if running and result.changed else
+                                        ' Settings apply when you start a session.' if result.changed else '')
+            chat_append('Agent: ' + message)
+            append_log(message + '\n')
+            status.set(message)
+        except (ValueError, TypeError, RuntimeError, KeyError, OSError) as failure:
+            chat_append('Command not applied: ' + str(failure))
+            status.set('Command not applied: ' + str(failure))
+
     def tick():
         nonlocal running
         append_log(''.join(controller.drain_output()))
+        if command_task is not None:
+            response = command_task.poll()
+            if response is not None:
+                finish_command(*response)
         if running and controller.poll() is not None:
             code = controller.poll()
             running = False
@@ -353,7 +492,8 @@ def open_menu(config_path='config.json'):
     force_button = ttk.Button(actions, text='Force end', command=force, state='disabled')
     load_button = ttk.Button(actions, text='Load settings…', command=lambda: settings(False))
     save_button = ttk.Button(actions, text='Save settings…', command=lambda: settings(True))
-    for button in (start_button, check_button, stop_button, force_button, load_button, save_button):
+    chat_button = ttk.Button(actions, text='Talk to agent…', command=show_chat)
+    for button in (start_button, check_button, stop_button, force_button, load_button, save_button, chat_button):
         button.pack(side='left', padx=(0, 5))
     mode.bind('<<ComboboxSelected>>', set_mode)
     widgets['match_format'].bind('<<ComboboxSelected>>', change_format)
